@@ -1,0 +1,9 @@
+openai
+gradio
+langchain
+langchain-community
+langchain-openai
+pypdf
+faiss-cpu
+tiktoken
+huggingface_hub
