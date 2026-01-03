@@ -8,3 +8,4 @@ pypdf
 tiktoken
 faiss-cpu
 openai
+cryptography
