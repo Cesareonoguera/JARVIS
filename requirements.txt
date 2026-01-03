@@ -1,9 +1,7 @@
-openai
-gradio
+streamlit
 langchain
 langchain-community
-langchain-openai
+openai
 pypdf
-faiss-cpu
 tiktoken
-huggingface_hub
+faiss-cpu
