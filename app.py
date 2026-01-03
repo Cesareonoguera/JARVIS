@@ -1,106 +1,115 @@
+import streamlit as st
 import os
-#import gradio as gr
 from langchain_openai import ChatOpenAI
 from langchain_community.document_loaders import PyPDFDirectoryLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter # <-- CORREGIDO
 from langchain_community.vectorstores import FAISS
-from langchain_openai import OpenAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings # <-- Más estable y gratis
 
-# Configuración de la página
+# 1. CONFIGURACIÓN DE PÁGINA
 st.set_page_config(page_title="JARVIS BIM", page_icon="🤖")
+st.title("🤖 JARVIS BIM - DeepSeek Edition")
 
-# 1. CONFIGURACIÓN DE SEGURIDAD
-api_key = os.getenv("DEEPSEEK_API_KEY")
+# 2. GESTIÓN DE LA API KEY (SECRETS)
+# Intentamos leer de st.secrets, si falla, mostramos aviso amable
+if "DEEPSEEK_API_KEY" in st.secrets:
+    api_key = st.secrets["DEEPSEEK_API_KEY"]
+else:
+    st.error("⚠️ No se ha encontrado la API Key de DeepSeek en los Secrets.")
+    st.stop()
 
-if not api_key:
-    raise ValueError("¡ERROR! No se ha encontrado la variable DEEPSEEK_API_KEY en los Secrets.")
-
-# 2. PREPARACIÓN DE LA BIBLIOTECA (RAG)
+# 3. PREPARACIÓN DE LA BIBLIOTECA (CON CACHÉ)
+# @st.cache_resource hace que esto corra solo una vez al inicio
+@st.cache_resource
 def procesar_documentacion():
-    print("🔄 J.A.R.V.I.S. está indexando la normativa...")
-    loader = PyPDFDirectoryLoader(".") 
-    docs = loader.load()
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    splits = text_splitter.split_documents(docs)
-    
-    # Usamos embeddings de DeepSeek (compatible OpenAI)
-    embeddings = OpenAIEmbeddings(
-        openai_api_key=api_key, 
-        openai_api_base="https://api.deepseek.com",
-        check_embedding_ctx_length=False
-    )
-    
-    vectorstore = FAISS.from_documents(splits, embeddings)
-    return vectorstore
+    with st.spinner("🔄 J.A.R.V.I.S. está indexando la normativa (esto ocurre solo una vez)..."):
+        loader = PyPDFDirectoryLoader(".") 
+        docs = loader.load()
+        
+        if not docs:
+            st.warning("No se encontraron PDFs en la carpeta.")
+            return None
 
-# Inicializamos la base de datos al arrancar
-try:
-    vectorstore = procesar_documentacion()
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200
+        )
+        splits = text_splitter.split_documents(docs)
+        
+        # Usamos embeddings locales (gratis y rápidos) para no depender de la API para esto
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        
+        vectorstore = FAISS.from_documents(splits, embeddings)
+        return vectorstore
+
+# Inicializar vectorstore
+vectorstore = procesar_documentacion()
+
+if vectorstore:
     retriever = vectorstore.as_retriever()
-except Exception as e:
-    print(f"Error indexando: {e}")
+else:
     retriever = None
 
-# ASÍ SE CONECTA A DEEPSEEK USANDO LOS SECRETOS DE STREAMLIT
+# 4. CONFIGURACIÓN DEL LLM (DeepSeek)
 def get_llm():
     return ChatOpenAI(
         model='deepseek-chat', 
-        openai_api_key=st.secrets["DEEPSEEK_API_KEY"], 
-        openai_api_base='https://api.deepseek.com', # <--- Esto redirige a DeepSeek
+        openai_api_key=api_key, 
+        openai_api_base='https://api.deepseek.com',
         temperature=0
     )
 
-st.title("🤖 JARVIS BIM - DeepSeek Edition")
+# 5. INTERFAZ DE CHAT (LÓGICA STREAMLIT)
 
-# 4. EL SISTEMA DE RESPUESTA
-def consultar_jarvis(mensaje, historia):
-    if not retriever:
-        return "⚠️ Error: No se han podido cargar los documentos PDF. Revisa los logs."
+# Inicializar historial si no existe
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # Buscamos contexto relevante
-    docs = retriever.invoke(mensaje)
-    contexto = "\n\n".join([d.page_content for d in docs])
+# Mostrar mensajes anteriores
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-    system_prompt = f"""
-    Eres J.A.R.V.I.S., el ingeniero virtual senior de BIM Consulting Solutions SL.
-    
-    TU MISIÓN:
-    Ser un consultor normativo (CTE, Código Estructural, Eurocódigos).
-    
-    DIRECTIVA DE SEGURIDAD Nº 1:
-    NO REALICES CÁLCULOS MATEMÁTICOS NI DIMENSIONAMIENTOS.
-    Si el usuario pide un cálculo, explica la normativa aplicable y DERÍVALO a la "Suite de Cálculo de BIM Consulting Solutions".
-    
-    CONTEXTO NORMATIVO RECUPERADO:
-    {contexto}
-    
-    Instrucciones de respuesta:
-    1. Responde basándote estrictamente en el contexto normativo anterior.
-    2. Cita siempre la norma y el artículo (Ej: DB-SE-C Art 4.1).
-    3. Si el contexto no tiene la respuesta, dilo honestamente.
-    """
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": mensaje}
-    ]
-    
-    response = llm.invoke(messages)
-    return response.content
+# Capturar nueva entrada del usuario
+if prompt := st.chat_input("Consulta la normativa (CTE, EHE...)..."):
+    # Guardar y mostrar mensaje usuario
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-# 5. LA INTERFAZ
-interfaz = gr.ChatInterface(
-    fn=consultar_jarvis,
-    title="J.A.R.V.I.S. - Structural Core",
-    description="Asistente de Normativa (CTE / CE / Eurocódigos) de BIM Consulting Solutions.",
-    theme="soft",
-    examples=["Recubrimiento mínimo en ambiente marino según Código Estructural", "Sobrecarga de uso en hospitales CTE DB-SE-AE"],
-    submit_btn="Analizar Normativa",
-)
-
-if __name__ == "__main__":
-    interfaz.launch(server_name="0.0.0.0", server_port=7860)
+    # Generar respuesta
+    with st.chat_message("assistant"):
+        if not retriever:
+            response = "⚠️ Error: La base de datos documental no está activa."
+            st.markdown(response)
+        else:
+            with st.spinner("Analizando normativa..."):
+                # Recuperar contexto
+                docs = retriever.invoke(prompt)
+                contexto = "\n\n".join([d.page_content for d in docs])
+                
+                # Prompt del sistema
+                system_prompt = f"""
+                Eres J.A.R.V.I.S., el ingeniero virtual senior de BIM Consulting Solutions SL.
+                
+                CONTEXTO NORMATIVO:
+                {contexto}
+                
+                PREGUNTA DEL USUARIO:
+                {prompt}
+                
+                INSTRUCCIONES:
+                1. Responde basándote estrictamente en el contexto normativo.
+                2. Cita siempre la norma y el artículo.
+                3. NO INVENTES información. Si no está en el contexto, dilo.
+                """
+                
+                # Llamada al LLM
+                llm = get_llm()
+                try:
+                    full_response = llm.invoke(system_prompt).content
+                    st.markdown(full_response)
+                    # Guardar respuesta en historial
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+                except Exception as e:
+                    st.error(f"Error al conectar con DeepSeek: {e}")
