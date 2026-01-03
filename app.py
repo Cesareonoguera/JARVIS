@@ -1,10 +1,13 @@
 import os
-import gradio as gr
+#import gradio as gr
 from langchain_openai import ChatOpenAI
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
+
+# Configuración de la página
+st.set_page_config(page_title="JARVIS BIM", page_icon="🤖")
 
 # 1. CONFIGURACIÓN DE SEGURIDAD
 api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -42,14 +45,16 @@ except Exception as e:
     print(f"Error indexando: {e}")
     retriever = None
 
-# 3. EL CEREBRO DE JARVIS
-llm = ChatOpenAI(
-    model='deepseek-chat', 
-    openai_api_key=api_key, 
-    openai_api_base='https://api.deepseek.com',
-    temperature=0.3,
-    max_tokens=2000
-)
+# ASÍ SE CONECTA A DEEPSEEK USANDO LOS SECRETOS DE STREAMLIT
+def get_llm():
+    return ChatOpenAI(
+        model='deepseek-chat', 
+        openai_api_key=st.secrets["DEEPSEEK_API_KEY"], 
+        openai_api_base='https://api.deepseek.com', # <--- Esto redirige a DeepSeek
+        temperature=0
+    )
+
+st.title("🤖 JARVIS BIM - DeepSeek Edition")
 
 # 4. EL SISTEMA DE RESPUESTA
 def consultar_jarvis(mensaje, historia):
